@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remote BSC creation fetcher (built 2026-11-05).
+"""Remote BSC creation fetcher (built 2026-11-05; parallelised 2026-11-10).
 
 Runs on a datacenter host (GitHub Actions runner): scans BSC blocks at full
 speed, extracts contract creations (tx.to == null), fingerprints the deployed
@@ -13,11 +13,21 @@ local deploy_watch). Feed line schema (one JSON object per candidate):
   {"block": int, "ts": int, "contract": "0x..", "creator": "0x..",
    "kind": "PEARL-FAMILY"|"POW-SUSPECT", "name": str|null, "symbol": str|null}
 
-Usage: python3 fetcher.py [--max-blocks 20000] [--state state.json]
-                          [--feed feed.jsonl]
-Stdlib only. RPC failover across public BSC endpoints.
+Performance notes (2026-11-10): the original fetched block batches strictly
+serially (~125 blocks/s end-to-end; 60k blocks ≈ 7.5 min). This version
+fetches the 50-block RPC batches concurrently (16 workers, endpoints rotated
+per batch) and loops over scan windows inside the job until it is near the
+head or a soft time budget (--budget-secs) expires, committing state after
+every 1000-block chunk exactly like the original. Classification, the
+gapless/chunk-atomic stop rule, the feed schema and state semantics are
+UNCHANGED — this is a throughput change only.
+
+Usage: python3 fetcher.py [--max-blocks 400000] [--budget-secs 480]
+                          [--state state.json] [--feed feed.jsonl]
+Stdlib + pycryptodome. RPC failover across public BSC endpoints.
 """
-import json, sys, os, argparse, urllib.request, urllib.error
+import json, sys, os, argparse, time, threading, urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from Crypto.Hash import keccak
 
 def sel(sig):
@@ -45,6 +55,20 @@ RPCS = ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io",
         "https://bsc-dataseed3.binance.org", "https://bsc-dataseed4.binance.org",
         "https://bsc-rpc.publicnode.com", "https://bsc-dataseed1.ninicoin.io"]
 UA = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
+WORKERS = 16
+
+_rot_lock = threading.Lock()
+_rot_idx = 0
+
+def _rotated_rpcs():
+    """RPCS rotated by a shared counter so concurrent batch calls spread
+    across endpoints instead of all queueing on the first one."""
+    global _rot_idx
+    with _rot_lock:
+        i = _rot_idx
+        _rot_idx += 1
+    i %= len(RPCS)
+    return RPCS[i:] + RPCS[:i]
 
 def _post(url, payload, timeout):
     req = urllib.request.Request(url, data=payload.encode(), headers=UA)
@@ -54,7 +78,7 @@ def _post(url, payload, timeout):
 def rpc(method, params, timeout=20):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
                        "params": params})
-    for url in RPCS:
+    for url in _rotated_rpcs():
         try:
             d = _post(url, body, timeout)
             if d and not d.get("error"):
@@ -66,7 +90,7 @@ def rpc(method, params, timeout=20):
 def rpc_batch(calls, timeout=30):
     payload = json.dumps([{"jsonrpc": "2.0", "id": i, "method": m,
                            "params": p} for i, (m, p) in enumerate(calls)])
-    for url in RPCS:
+    for url in _rotated_rpcs():
         try:
             d = _post(url, payload, timeout)
             if not isinstance(d, list):
@@ -100,8 +124,7 @@ def create_address(sender, nonce):
     k = keccak.new(digest_bits=256); k.update(payload)
     return "0x" + k.hexdigest()[-40:]
 
-def call_str(to, data):
-    r = rpc("eth_call", [{"to": to, "data": data}, "latest"], 10)
+def parse_str(r):
     if not r or r == "0x":
         return None
     try:
@@ -112,15 +135,22 @@ def call_str(to, data):
     except Exception:
         return None
 
+def call_str(to, data):
+    return parse_str(rpc("eth_call", [{"to": to, "data": data}, "latest"], 10))
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-blocks", type=int, default=20000)
+    ap.add_argument("--budget-secs", type=int, default=0,
+                    help="soft wall-clock budget; 0 = no budget (scan the "
+                         "full --max-blocks range in one run)")
     ap.add_argument("--state", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "state.json"))
     ap.add_argument("--feed", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "feed.jsonl"))
     args = ap.parse_args()
 
+    t0 = time.time()
     state = {"last_block": 0}
     if os.path.exists(args.state):
         with open(args.state) as f:
@@ -142,24 +172,32 @@ def main():
     scanned_to = cur
     n_cand = 0
     CHUNK = 1000
+    B = 50
+    pool = ThreadPoolExecutor(max_workers=WORKERS)
     while scanned_to < end:
+        if args.budget_secs and time.time() - t0 > args.budget_secs:
+            print(f"BUDGET STOP: {args.budget_secs}s budget reached at "
+                  f"watermark {scanned_to} (head {latest})")
+            break
         chunk_end = min(scanned_to + CHUNK, end)
         bns = list(range(scanned_to + 1, chunk_end + 1))
+        parts = [bns[i:i + B] for i in range(0, len(bns), B)]
+        batch_calls = [[("eth_getBlockByNumber", [hex(bn), True])
+                        for bn in part] for part in parts]
         blocks = {}
-        B = 50
-        for i in range(0, len(bns), B):
-            part = bns[i:i + B]
-            res = rpc_batch([("eth_getBlockByNumber", [hex(bn), True])
-                             for bn in part])
+        for part, res in zip(parts, pool.map(rpc_batch, batch_calls)):
             for bn, blk in zip(part, res):
                 if blk is not None:
                     blocks[bn] = blk
         missing = [bn for bn in bns if bn not in blocks]
-        for bn in missing:  # single retry per missing block
-            blk = rpc("eth_getBlockByNumber", [hex(bn), True], 20)
-            if blk is not None:
-                blocks[bn] = blk
-        missing = [bn for bn in bns if bn not in blocks]
+        if missing:  # parallel single retry per missing block
+            retry = list(pool.map(
+                lambda bn: rpc("eth_getBlockByNumber", [hex(bn), True], 20),
+                missing))
+            for bn, blk in zip(missing, retry):
+                if blk is not None:
+                    blocks[bn] = blk
+            missing = [bn for bn in bns if bn not in blocks]
         if missing:
             # gapless rule: stop the whole run at the first gap; progress
             # before the gap is NOT committed either (chunk is atomic),
@@ -169,6 +207,7 @@ def main():
                   f"watermark stays {scanned_to}")
             with open(args.state, "w") as f:
                 json.dump({"last_block": scanned_to}, f)
+            pool.shutdown(wait=False)
             return 0
 
         creations = []  # (block, ts, contract_addr, creator)
@@ -183,12 +222,13 @@ def main():
                         int(nonce, 16) if nonce else 0)
                     creations.append((bn, ts, addr, (tx.get("from") or "").lower()))
 
-        # fingerprint all creations in this chunk (batched getCode)
+        # fingerprint all creations in this chunk (batched getCode, parallel)
         hits = []
-        for i in range(0, len(creations), 50):
-            part = creations[i:i + 50]
-            codes = rpc_batch([("eth_getCode", [a, "latest"])
-                               for _bn, _ts, a, _cr in part])
+        code_parts = [creations[i:i + 50]
+                      for i in range(0, len(creations), 50)]
+        code_calls = [[("eth_getCode", [a, "latest"])
+                       for _bn, _ts, a, _cr in part] for part in code_parts]
+        for part, codes in zip(code_parts, pool.map(rpc_batch, code_calls)):
             for (bn, ts, addr, creator), code in zip(part, codes):
                 if not code or len(code) < 200:
                     continue
@@ -204,10 +244,17 @@ def main():
                 hits.append({"block": bn, "ts": ts, "contract": addr,
                              "creator": creator, "kind": kind,
                              "name": None, "symbol": None})
-        for h in hits:
-            h["name"] = call_str(h["contract"], "0x06fdde03")
-            h["symbol"] = call_str(h["contract"], "0x95d89b41")
-        if hits:
+        if hits:  # name()/symbol() for all hits in one batch round-trip
+            ns_calls = []
+            for h in hits:
+                ns_calls.append(("eth_call", [{"to": h["contract"],
+                                               "data": "0x06fdde03"}, "latest"]))
+                ns_calls.append(("eth_call", [{"to": h["contract"],
+                                               "data": "0x95d89b41"}, "latest"]))
+            ns_res = rpc_batch(ns_calls, timeout=20)
+            for i, h in enumerate(hits):
+                h["name"] = parse_str(ns_res[2 * i])
+                h["symbol"] = parse_str(ns_res[2 * i + 1])
             with open(args.feed, "a") as f:
                 for h in hits:
                     f.write(json.dumps(h) + "\n")
@@ -217,9 +264,12 @@ def main():
         with open(args.state, "w") as f:
             json.dump({"last_block": scanned_to}, f)
         print(f"chunk -> {scanned_to} creations={len(creations)} "
-              f"candidates={len(hits)}", flush=True)
+              f"candidates={len(hits)} elapsed={time.time() - t0:.0f}s",
+              flush=True)
 
-    print(f"DONE watermark={scanned_to} candidates_this_run={n_cand}")
+    pool.shutdown(wait=False)
+    print(f"DONE watermark={scanned_to} candidates_this_run={n_cand} "
+          f"elapsed={time.time() - t0:.0f}s")
     return 0
 
 if __name__ == "__main__":
