@@ -1,9 +1,45 @@
 name: bsc-fetcher
+
+# Remote creation fetcher for the BSC intel patrol. Runs on GitHub's
+# datacenter network (full-speed RPC), commits only the distilled
+# candidate feed + watermark back to this repo.
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bsc-fetcher
+  cancel-in-progress: false
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 55
     steps:
-      - name: hello
-        run: echo "fetcher test ok" && date -u
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install --quiet pycryptodome
+
+      - name: Run fetcher
+        run: python3 fetcher.py --max-blocks 60000
+
+      - name: Commit feed + state
+        run: |
+          git config user.name "bsc-fetcher"
+          git config user.email "actions@github.com"
+          git add state.json feed.jsonl
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "fetch: watermark $(python3 -c 'import json;print(json.load(open(\"state.json\"))[\"last_block\"])')"
+            git push
+          fi
