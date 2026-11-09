@@ -1,0 +1,9 @@
+name: bsc-fetcher
+on:
+  workflow_dispatch:
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: hello
+        run: echo "fetcher test ok" && date -u
