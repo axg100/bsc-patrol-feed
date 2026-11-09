@@ -40,6 +40,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fetch: watermark $(python3 -c \"import json;print(json.load(open('state.json'))['last_block'])\")"
+            WM=$(python3 -c 'import json;print(json.load(open("state.json"))["last_block"])')
+            git commit -m "fetch: watermark $WM"
             git push
           fi
