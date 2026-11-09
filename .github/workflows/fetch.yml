@@ -30,7 +30,7 @@ jobs:
         run: pip install --quiet pycryptodome
 
       - name: Run fetcher
-        run: python3 fetcher.py --max-blocks 60000
+        run: python3 fetcher.py --max-blocks 400000 --budget-secs 480
 
       - name: Commit feed + state
         run: |
@@ -40,6 +40,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "fetch: watermark $(python3 -c 'import json;print(json.load(open(\"state.json\"))[\"last_block\"])')"
+            git commit -m "fetch: watermark $(python3 -c \"import json;print(json.load(open('state.json'))['last_block'])\")"
             git push
           fi
