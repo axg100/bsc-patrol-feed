@@ -2,3 +2,5 @@
 {"block": 131791184, "ts": 1793870172, "contract": "0x0f90af3e57e0e16cf607e428b228ced840bd5ddd", "creator": "0xec1e58716db851d3b7369500055dda63a383bbea", "kind": "PEARL-FAMILY", "name": "ZELQOR", "symbol": "ZELQOR"}
 {"block": 132004356, "ts": 1793966121, "contract": "0x6366645548eae0a1c586f2fb1b0bccaaa7aefc77", "creator": "0x4a947ecf2597405b1e4297f19c68c8e59a3ce687", "kind": "PEARL-FAMILY", "name": "ZELQOR", "symbol": "ZELQOR"}
 {"block": 132220255, "ts": 1794063319, "contract": "0xfdd21bad4fe203be41dc3c00f91eafed7706daf5", "creator": "0xb1529055a53d5ac760782198fab6b2a28e56eb6b", "kind": "PEARL-SUSPECT", "name": null, "symbol": null}
+{"block": 132492063, "ts": 1794185670, "contract": "0x4d46ad56b530760a690433f80a282e42d8d32039", "creator": "0xc5f6a7124dd78e34d7fbd1f037246cdaabc97dc3", "kind": "POW-SINGLE", "name": "\u5b9d\u77f3\u5e01", "symbol": "\u5b9d\u77f3\u5e01"}
+{"block": 132524362, "ts": 1794200208, "contract": "0xbeb8833c5a5290678e67af65a4c12f9402ba404f", "creator": "0x60ca54dd299ca1470b26437599d5f8b8a8054d58", "kind": "POW-SINGLE", "name": "\u5b9d\u77f3\u5e01", "symbol": "\u5b9d\u77f3\u5e01"}
