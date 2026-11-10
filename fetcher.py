@@ -161,6 +161,15 @@ def main():
         print("FATAL: cannot read eth_blockNumber from any RPC")
         return 1
     latest = int(latest, 16)
+    # Canary (2026-11-10): prove the eth_getCode path works BEFORE scanning.
+    # A night of output was silently zeroed when code reads failed while
+    # block reads kept succeeding and the watermark advanced anyway.
+    canary = rpc("eth_getCode",
+                 ["0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "latest"], 15)
+    if not canary or len(canary) < 200:
+        print("FATAL: eth_getCode canary (WBNB) failed on all RPCs — "
+              "refusing to scan blind")
+        return 1
     if cur == 0:
         cur = latest  # first ever run: start at head, never backfill blindly
     end = min(latest, cur + args.max_blocks)
@@ -222,14 +231,54 @@ def main():
                         int(nonce, 16) if nonce else 0)
                     creations.append((bn, ts, addr, (tx.get("from") or "").lower()))
 
-        # fingerprint all creations in this chunk (batched getCode, parallel)
+        # Fingerprint all creations in this chunk. Code reads use small
+        # batches (10) + one leftover re-batch + a capped serial fill:
+        # public endpoints return PARTIAL batch responses under load, and
+        # the old code silently skipped every None code — the failure that
+        # zeroed output while the watermark advanced (2026-11-10).
+        codes_by_addr = {}
+
+        def _fetch_codes(addrs):
+            parts = [addrs[i:i + 10] for i in range(0, len(addrs), 10)]
+            calls = [[("eth_getCode", [a, "latest"]) for a in part]
+                     for part in parts]
+            for part, codes in zip(parts, pool.map(rpc_batch, calls)):
+                for a, code in zip(part, codes):
+                    if code is not None:
+                        codes_by_addr[a] = code
+
+        all_addrs = [a for _bn, _ts, a, _cr in creations]
+        _fetch_codes(all_addrs)
+        leftover = [a for a in all_addrs if a not in codes_by_addr]
+        if leftover:
+            _fetch_codes(leftover)  # one re-batch of the leftovers
+            leftover = [a for a in all_addrs if a not in codes_by_addr]
+        for a in leftover[:15]:  # capped serial completion
+            code = rpc("eth_getCode", [a, "latest"], 10)
+            if code is not None:
+                codes_by_addr[a] = code
+        codes_ok = len(codes_by_addr)
+        if len(creations) >= 10 and codes_ok == 0:
+            print(f"STOP: code path dead — {len(creations)} creations, "
+                  f"0 getCode results in chunk {bns[0]}..{bns[-1]}; "
+                  f"watermark stays {scanned_to}")
+            with open(args.state, "w") as f:
+                json.dump({"last_block": scanned_to}, f)
+            pool.shutdown(wait=False)
+            return 1
+        if creations and codes_ok < len(creations) * 0.5:
+            print(f"STOP: code path degraded — {codes_ok}/"
+                  f"{len(creations)} getCode results in chunk "
+                  f"{bns[0]}..{bns[-1]}; watermark stays {scanned_to}")
+            with open(args.state, "w") as f:
+                json.dump({"last_block": scanned_to}, f)
+            pool.shutdown(wait=False)
+            return 1
+
         hits = []
-        code_parts = [creations[i:i + 50]
-                      for i in range(0, len(creations), 50)]
-        code_calls = [[("eth_getCode", [a, "latest"])
-                       for _bn, _ts, a, _cr in part] for part in code_parts]
-        for part, codes in zip(code_parts, pool.map(rpc_batch, code_calls)):
-            for (bn, ts, addr, creator), code in zip(part, codes):
+        for (bn, ts, addr, creator) in creations:
+            code = codes_by_addr.get(addr)
+            if True:
                 if not code or len(code) < 200:
                     continue
                 hexcode = code[2:]
@@ -264,7 +313,8 @@ def main():
         with open(args.state, "w") as f:
             json.dump({"last_block": scanned_to}, f)
         print(f"chunk -> {scanned_to} creations={len(creations)} "
-              f"candidates={len(hits)} elapsed={time.time() - t0:.0f}s",
+              f"codes_ok={codes_ok} candidates={len(hits)} "
+              f"elapsed={time.time() - t0:.0f}s",
               flush=True)
 
     pool.shutdown(wait=False)
