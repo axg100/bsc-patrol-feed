@@ -11,7 +11,7 @@ State: state.json {"last_block": N} beside this script. The watermark only
 advances over a contiguous fully-fetched prefix (gapless rule, same as the
 local deploy_watch). Feed line schema (one JSON object per candidate):
   {"block": int, "ts": int, "contract": "0x..", "creator": "0x..",
-   "kind": "PEARL-FAMILY"|"PEARL-SUSPECT"|"POW-SUSPECT"|"POW-SINGLE",
+   "kind": "PEARL-FAMILY"|"PEARL-SUSPECT"|"POW-SUSPECT"|"POW-SINGLE"|"SHARE-SUSPECT",
    "name": str|null, "symbol": str|null}  (SUSPECT/SINGLE = one selector)
 
 Performance notes (2026-11-10): the original fetched block batches strictly
@@ -68,6 +68,21 @@ POW_RARE_SIGS = ["mineBatch(uint256,uint256[],uint256)",
                  "solve(uint256,address)",
                  "mintWithProof(uint256,bytes32)", "mintPow(uint256,uint256)"]
 POW_RARE_SELS = set(sel(s) for s in POW_RARE_SIGS)
+
+# Share-template lane (2026-11-10 patch, pending push): our #1 money class
+# (DOG/FLOKI/PIG share clones) was invisible to this fetcher -- it only knew
+# PEARL/PoW selector sets. BASKET's sale is the specimen: a share-style
+# contract (shares()/freeShares()/FreeUsed()) whose PoW entry has a
+# project-specific name no selector set will ever match, but whose SHARE
+# fingerprint is plain. >=2 share hits -> SHARE-SUSPECT (same class name the
+# local candidates file already uses). agent_gate = the code references the
+# SPACE ID registry address (Agent-ID gate marker), carried as a boolean.
+SHARE_SIGS = ["totalShares()", "TOTAL_SHARES()", "shares()", "freeShares()",
+              "mintPrice()", "pricePerShare()", "PRICE_PER_SHARE()",
+              "poolPrice()", "openPrice()", "POOL_PRICE()", "totalMinted()",
+              "opened()", "basePrice()", "tokensPerShare()", "TOKENS_PER_LOT()"]
+SHARE_SELS = [sel(s) for s in SHARE_SIGS]
+REGISTRY_HEX = "60b9262456de011f7d15a54cdd8c48baaa8b022f"
 
 RPCS = ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io",
         "https://bsc-dataseed3.binance.org", "https://bsc-dataseed4.binance.org",
@@ -302,6 +317,8 @@ def main():
             pearl_hits = sum(1 for s in PEARL_SELS if s in hexcode)
             pow_hit_sels = [s for s in POW_SELS if s in hexcode]
             pow_hits = len(pow_hit_sels)
+            share_hits = sum(1 for s in SHARE_SELS if s in hexcode)
+            agent_gate = REGISTRY_HEX in hexcode
             if pearl_hits >= 2:
                 kind = "PEARL-FAMILY"
             elif pow_hits >= 2:
@@ -310,10 +327,13 @@ def main():
                 kind = "PEARL-SUSPECT"
             elif pow_hits == 1 and pow_hit_sels[0] in POW_RARE_SELS:
                 kind = "POW-SINGLE"
+            elif share_hits >= 2:
+                kind = "SHARE-SUSPECT"
             else:
                 continue
             hits.append({"block": bn, "ts": ts, "contract": addr,
                          "creator": creator, "kind": kind,
+                         "share_hits": share_hits, "agent_gate": agent_gate,
                          "name": None, "symbol": None})
         if hits:  # name()/symbol() for all hits in one batch round-trip
             ns_calls = []
