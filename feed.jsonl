@@ -1,3 +1,4 @@
 {"seed": true, "note": "distilled candidate feed; lines without a contract field are not candidates"}
 {"block": 131791184, "ts": 1793870172, "contract": "0x0f90af3e57e0e16cf607e428b228ced840bd5ddd", "creator": "0xec1e58716db851d3b7369500055dda63a383bbea", "kind": "PEARL-FAMILY", "name": "ZELQOR", "symbol": "ZELQOR"}
 {"block": 132004356, "ts": 1793966121, "contract": "0x6366645548eae0a1c586f2fb1b0bccaaa7aefc77", "creator": "0x4a947ecf2597405b1e4297f19c68c8e59a3ce687", "kind": "PEARL-FAMILY", "name": "ZELQOR", "symbol": "ZELQOR"}
+{"block": 132220255, "ts": 1794063319, "contract": "0xfdd21bad4fe203be41dc3c00f91eafed7706daf5", "creator": "0xb1529055a53d5ac760782198fab6b2a28e56eb6b", "kind": "PEARL-SUSPECT", "name": null, "symbol": null}
