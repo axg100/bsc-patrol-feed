@@ -11,7 +11,8 @@ State: state.json {"last_block": N} beside this script. The watermark only
 advances over a contiguous fully-fetched prefix (gapless rule, same as the
 local deploy_watch). Feed line schema (one JSON object per candidate):
   {"block": int, "ts": int, "contract": "0x..", "creator": "0x..",
-   "kind": "PEARL-FAMILY"|"POW-SUSPECT", "name": str|null, "symbol": str|null}
+   "kind": "PEARL-FAMILY"|"PEARL-SUSPECT"|"POW-SUSPECT"|"POW-SINGLE",
+   "name": str|null, "symbol": str|null}  (SUSPECT/SINGLE = one selector)
 
 Performance notes (2026-11-10): the original fetched block batches strictly
 serially (~125 blocks/s end-to-end; 60k blocks ≈ 7.5 min). This version
@@ -43,13 +44,30 @@ POW_SIGS = ["mine(uint256)","mine(uint256,uint256)","mine(uint256,uint256,uint25
             "mineFor(address,uint256)","mineBatch(uint256)","mineBatch(uint256,bytes32[],uint256)",
             "submitProof(bytes32)","submitProof(uint256,bytes32)","submitWork(uint256,uint256)",
             "submit(uint256)","submitSolution(uint256)","submitSolution(uint256,uint256)",
-            "solve(uint256)","solve(uint256,uint256)","prove(uint256,uint256)","prove(bytes32)",
+            "solve(uint256)","solve(uint256,uint256)","solve(uint256,address)",
+            "prove(uint256,uint256)","prove(bytes32)",
             "dig(uint256)","dig(uint256,uint256)","excavate(uint256)","harvest(uint256)",
             "work(uint256)","pow(uint256)","mintWithProof(uint256,bytes32)",
             "mintPow(uint256,uint256)","workOf(address,uint256,bytes32)",
             "challengeFor(uint256,uint256)","targetFor(address)"]
 POW_SELS = [sel(s) for s in POW_SIGS]
 PEARL_SELS = ["39148c53", "fd76c4eb", "d2e3ae76"]  # currentTarget/proofDigest/puzzleSeed
+
+# Single-hit tier (user-approved 2026-11-10): these PoW signatures are rare
+# enough that ONE match is meaningful (solve(uint256,address) is the BASKET
+# sale shape, proven first-hand). Generic colliders (submit/prove/work/pow/
+# dig/plain mine) still need >= 2 hits. PEARL single-hit is PEARL-SUSPECT:
+# currentTarget() is essentially unique to the Pearl family.
+POW_RARE_SIGS = ["mineBatch(uint256,uint256[],uint256)",
+                 "mineBatch(uint256[],uint256)", "mineBatch(uint256)",
+                 "mineBatch(uint256,bytes32[],uint256)",
+                 "submitProof(uint256)", "submitProof(uint256,uint256)",
+                 "submitProof(bytes32)", "submitProof(uint256,bytes32)",
+                 "submitSolution(uint256)", "submitSolution(uint256,uint256)",
+                 "solve(uint256)", "solve(uint256,uint256)",
+                 "solve(uint256,address)",
+                 "mintWithProof(uint256,bytes32)", "mintPow(uint256,uint256)"]
+POW_RARE_SELS = set(sel(s) for s in POW_RARE_SIGS)
 
 RPCS = ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io",
         "https://bsc-dataseed3.binance.org", "https://bsc-dataseed4.binance.org",
@@ -278,21 +296,25 @@ def main():
         hits = []
         for (bn, ts, addr, creator) in creations:
             code = codes_by_addr.get(addr)
-            if True:
-                if not code or len(code) < 200:
-                    continue
-                hexcode = code[2:]
-                pearl_hits = sum(1 for s in PEARL_SELS if s in hexcode)
-                pow_hits = sum(1 for s in POW_SELS if s in hexcode)
-                if pearl_hits >= 2:
-                    kind = "PEARL-FAMILY"
-                elif pow_hits >= 2:
-                    kind = "POW-SUSPECT"
-                else:
-                    continue
-                hits.append({"block": bn, "ts": ts, "contract": addr,
-                             "creator": creator, "kind": kind,
-                             "name": None, "symbol": None})
+            if not code or len(code) < 200:
+                continue
+            hexcode = code[2:]
+            pearl_hits = sum(1 for s in PEARL_SELS if s in hexcode)
+            pow_hit_sels = [s for s in POW_SELS if s in hexcode]
+            pow_hits = len(pow_hit_sels)
+            if pearl_hits >= 2:
+                kind = "PEARL-FAMILY"
+            elif pow_hits >= 2:
+                kind = "POW-SUSPECT"
+            elif pearl_hits == 1:
+                kind = "PEARL-SUSPECT"
+            elif pow_hits == 1 and pow_hit_sels[0] in POW_RARE_SELS:
+                kind = "POW-SINGLE"
+            else:
+                continue
+            hits.append({"block": bn, "ts": ts, "contract": addr,
+                         "creator": creator, "kind": kind,
+                         "name": None, "symbol": None})
         if hits:  # name()/symbol() for all hits in one batch round-trip
             ns_calls = []
             for h in hits:
