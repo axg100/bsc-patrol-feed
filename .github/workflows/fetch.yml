@@ -42,5 +42,6 @@ jobs:
           else
             WM=$(python3 -c 'import json;print(json.load(open("state.json"))["last_block"])')
             git commit -m "fetch: watermark $WM"
-            git push
+            git pull --rebase origin main || true
+            git push || (sleep 5 && git pull --rebase origin main && git push)
           fi
