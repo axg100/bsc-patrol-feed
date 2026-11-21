@@ -116,3 +116,4 @@
 {"block": 134939998, "ts": 1795287885, "contract": "0x2ce833dec5f504b5679f965bb1b21f0e18f2d6a8", "creator": "0x0134df5436ecb11ed1f93e1f1de1918985719b45", "kind": "POW-SINGLE", "share_hits": 0, "agent_gate": false, "name": null, "symbol": null}
 {"block": 134940051, "ts": 1795287909, "contract": "0x509a059af3e86e956559958404d9adcda08cbeea", "creator": "0x8ca43832101538506a874e8702c914a5e6d1e78c", "kind": "POW-SINGLE", "share_hits": 0, "agent_gate": false, "name": null, "symbol": null}
 {"block": 134940574, "ts": 1795288144, "contract": "0x1fd794a8efa5adb3c3995d1ec914708b64c53c3c", "creator": "0x8ca43832101538506a874e8702c914a5e6d1e78c", "kind": "POW-SINGLE", "share_hits": 0, "agent_gate": false, "name": null, "symbol": null}
+{"block": 134945396, "ts": 1795290315, "contract": "0x5632180c6879a0f1db188fbfc2365cbaf63ed133", "creator": "0x0134df5436ecb11ed1f93e1f1de1918985719b45", "kind": "POW-SINGLE", "share_hits": 0, "agent_gate": false, "name": null, "symbol": null}
